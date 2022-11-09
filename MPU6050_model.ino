@@ -1,12 +1,14 @@
-//MPU6050_model.ino
+//TFlite_MPU6050_v1.ino
 #include <TensorFlowLite_ESP32.h>
-#include "tensorflow/lite/experimental/micro/micro_error_reporter.h"
-#include "tensorflow/lite/experimental/micro/micro_interpreter.h"
-#include "tensorflow/lite/experimental/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/schema/schema_generated.h"
-#include "tensorflow/lite/version.h"
-#include "tensorflow/lite/experimental/micro/kernels/micro_ops.h"
 #include "model.h"
+
+#include "tensorflow/lite/micro/all_ops_resolver.h"
+#include "tensorflow/lite/micro/micro_error_reporter.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/system_setup.h"
+
+#include "tensorflow/lite/schema/schema_generated.h"
+
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
@@ -45,12 +47,14 @@ void setup() {
 
   Serial.println("Adafruit MPU6050 test!");
   // Try to initialize!
-  if (!mpu.begin(0x69)) {
+  
+  if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
     while (1) {
       delay(10);
     }
   }
+  
   Serial.println("MPU6050 Found!");
   // Set Accelaration Range
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
@@ -63,22 +67,43 @@ void setup() {
   tflErrorReporter = &micro_error_reporter;
 
    tflModel = tflite::GetModel(g_model);
-   if (model->version() != TFLITE_SCHEMA_VERSION) {
-   error_reporter->Report(
-        "Model provided is schema version %d not equal "
-        "to supported version %d.",
-        model->version(), TFLITE_SCHEMA_VERSION);
+   if (tflModel->version() != TFLITE_SCHEMA_VERSION) {
+
+    TF_LITE_REPORT_ERROR(tflErrorReporter,
+                         "Model provided is schema version %d not equal "
+                         "to supported version %d.",
+                         tflModel->version(), TFLITE_SCHEMA_VERSION);
+
     return;
   }
-  static tflite::MicroMutableOpResolver micro_mutable_op_resolver;  
+
+  static tflite::MicroMutableOpResolver<2> micro_mutable_op_resolver(tflErrorReporter);  
+
+  if (micro_mutable_op_resolver.AddFullyConnected() != kTfLiteOk) {
+    return;
+  }
+  if (micro_mutable_op_resolver.AddSoftmax() != kTfLiteOk) {
+    return;
+  }
+  //micro_mutable_op_resolver.AddSoftmax();
+
+  /*
   micro_mutable_op_resolver.AddBuiltin(
       tflite::BuiltinOperator_FULLY_CONNECTED,
       tflite::ops::micro::Register_FULLY_CONNECTED());
+      //tflite::Register_FULLY_CONNECTED());
+  */
       
   static tflite::MicroInterpreter static_interpreter(tflModel, micro_mutable_op_resolver, tensorArena, tensorArenaSize, tflErrorReporter);
   tflInterpreter = &static_interpreter;
   
-  tflInterpreter->AllocateTensors();
+  // Allocate memory from the tensor_arena for the model's tensors.
+  TfLiteStatus allocate_status = tflInterpreter->AllocateTensors();
+  if (allocate_status != kTfLiteOk) {
+    TF_LITE_REPORT_ERROR(tflErrorReporter, "AllocateTensors() failed");
+    return;
+  }
+
   Serial.print("setup complete");
   tflInputTensor = tflInterpreter->input(0);
   tflOutputTensor = tflInterpreter->output(0);
